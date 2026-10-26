@@ -25,6 +25,7 @@
 #include "share/rc/ob_server_runtime.h"
 
 #include "share/ob_global_stat_proxy.h"
+#include "share/ob_ddl_common.h"
 #include "rootserver/ob_table_creator.h"
 #include "rootserver/ob_local_management_service.h"
 #include "share/inner_table/ob_load_inner_table_schema.h"
@@ -672,7 +673,15 @@ int ObBootstrap::init_global_stat()
   int ret = OB_SUCCESS;
   ObMySQLProxy &sql_proxy = ddl_service_.get_sql_proxy();
   ObMySQLTransaction trans;
-  if (OB_FAIL(check_inner_stat())) {
+  // Bootstrap runs on an RPC worker, whose default two-second timeout can expire
+  // while the initial global-stat transaction waits for the core table to settle.
+  // Give this DDL-like internal transaction the same bounded timeout policy as
+  // other DDL inner SQL instead of inheriting that worker deadline.
+  ObTimeoutCtx timeout_ctx;
+  const int64_t timeout_us = ObDDLUtil::calc_inner_sql_execute_timeout();
+  if (OB_FAIL(timeout_ctx.set_trx_timeout_us(timeout_us))) {
+  } else if (OB_FAIL(timeout_ctx.set_timeout(timeout_us))) {
+  } else if (OB_FAIL(check_inner_stat())) {
   } else {
     const int64_t baseline_schema_version = OB_INVALID_VERSION; // OB_INVALID_VERSION == -1
     const SCN snapshot_gc_scn = SCN::min_scn();
